@@ -2,6 +2,7 @@
 const express = require('express');
 const socketio = require('socket.io'); //https://socket.io/
 const http = require('http');
+const cors = require('cors');
 
 const { addUser, removeUser, getUser, getUsersInRoom } = require('./users.js') 
 
@@ -18,38 +19,45 @@ const io = socketio(server,{
         credentials: true
       }
 }); 
+ 
+app.use(cors());
+app.use(router);
 
 // Socket io initialization
-io.on('connection', (socket) => {
+io.on('connect', (socket) => {
+  socket.on('join', ({ name, room }, callback) => {
+   
+    const { error, user } = addUser({ id: socket.id, name, room });
 
-    socket.on('join',({name, room}, callback)=> {
-        const {error, user} = addUser({id: socket.id, name, room});
+    if(error) return callback(error);
+    
+    console.log("User log in", user.name);
+    socket.join(user.room);
 
-        if(error) return callback(error);
+    socket.emit('message', { user: 'admin', text: `${user.name}, welcome to room ${user.room}.`});
+    socket.broadcast.to(user.room).emit('message', { user: 'admin', text: `${user.name} has joined!` });
 
-        socket.emit('message', {user:'admin', text: `${user.name}, bienvenido a la sala ${user.room}`});
-        // Socket broadcast sends a message to everyone
-        socket.broadcast.to(user.room).emit('message', {user:'admin', text:`${user.name}, se unió a la sala`})
+    io.to(user.room).emit('roomData', { room: user.room, users: getUsersInRoom(user.room) });
 
-        socket.join(user.room);
+    callback();
+  });
 
-        callback();
-    })
+  socket.on('sendMessage', (message, callback) => {
+    const user = getUser(socket.id);
 
-    // Expect the event on the backend
-    socket.on('sendMessage', (message, callback) => {
-        const user = getUser(socket.id);
+    io.to(user.room).emit('message', { user: user.name, text: message });
 
-        io.to(user.room).emit('message', {user: user.name, text: message});
+     callback();
+  });
 
-        callback();
-    });
+  socket.on('disconnect', () => {
+    const user = removeUser(socket.id);
 
-    socket.on('disconnected', () => {
-        console.log("User had left");
-    });
+    if(user) {
+      io.to(user.room).emit('message', { user: 'Admin', text: `${user.name} has left.` });
+      io.to(user.room).emit('roomData', { room: user.room, users: getUsersInRoom(user.room)});
+    }
+  })
 });
-
-app.use(router)
 
 server.listen(PORT, () => console.log(`Server has started on port ${PORT}`));
